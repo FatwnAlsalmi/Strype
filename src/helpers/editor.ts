@@ -1790,3 +1790,12 @@ export function getCurrentFrameSelectionScope(): SelectAllFramesFuncDefScope {
     }
     return SelectAllFramesFuncDefScope.none;
 }
+
+
+//code visualiser
+declare global {
+    interface Window {
+      loadPyodide: () => Promise<any>;
+      pyodide: any; 
+    }
+  }

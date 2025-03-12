@@ -5,12 +5,16 @@
             <b-tabs v-model="peaDisplayTabIndex" no-key-nav>
                 <b-tab :title="'\u2771\u23BD '+$t('PEA.console')" title-link-class="pea-display-tab" active></b-tab>
                 <b-tab :button-id="graphicsTabId" :title="'\uD83D\uDC22 '+$t('PEA.TurtleGraphics')" title-link-class="pea-display-tab"></b-tab>
+                <b-tab :title="'\uD83D\uDC41\uFE0F '+$t('PEA.CodeVisualiser')" title-link-class="pea-display-tab"></b-tab>
             </b-tabs>
             <div class="flex-padding"/>
             <button ref="runButton" @click="runClicked" :title="$t((isPythonExecuting) ? 'PEA.stop' : 'PEA.run') + ' (Ctrl+Enter)'">
                 <img v-if="!isPythonExecuting" src="favicon.png" class="pea-play-img">
                 <span v-else class="python-running">{{runCodeButtonIconText}}</span>
                 <span>{{runCodeButtonLabel}}</span>
+            </button>
+            <button @click="runPythonCode" title="Visualize Execution">
+                <span>👀 Track Execution</span>
             </button>
         </div>
         <div id="tabContentContainerDiv">
@@ -32,6 +36,52 @@
                     <div id="pythonTurtleDiv" ref="pythonTurtleDiv"></div>
                 </div>
             </div>
+            <!-- Code Visualiser -->
+            <div v-show="peaDisplayTabIndex == 2" id="codeVisualiserDiv">
+                <div v-if="executionErrorMessage" class="error-message">
+                    <strong>Error:</strong> {{ executionErrorMessage }}
+                </div>
+
+                <div v-if="!executionErrorMessage"> 
+                    <div class="nav-buttons">
+                        <button @click="prevExecutedLine" :disabled="currentExecutedIndex <= 0" class="nav-button">Previous</button>
+                        <button @click="nextExecutedLine" :disabled="currentExecutedIndex >= totalSteps" class="nav-button next-button">Next</button>
+                    </div>
+
+                    <div class="code-container">
+                        <div v-for="(codeLine, index) in codeLines" :key="index" 
+                            class="code-row"
+                            :class="{
+                                'executed-line': index === executedLinesList[currentExecutedIndex - 1],  
+                                'current-line': index === executedLinesList[currentExecutedIndex] 
+                            }">
+                            <span class="line-number">{{ index + 1 }}</span>
+                            <span class="line-separator"></span> 
+                            <pre class="code-content">{{ codeLine.line }}</pre>
+                        </div>
+                    </div>
+
+
+                    <p class="iteration-info">Step {{ currentExecutedIndex }} out of {{ totalSteps }}</p>
+
+                    <table class="stack-table">
+                        <thead>
+                            <tr>
+                                <th>Stack</th>
+                                <th>Value</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr v-for="(entry, index) in filteredVariables" :key="index">
+                                <td>{{ entry[0] }}</td>
+                                <td>{{ JSON.stringify(entry[1]) }}</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+
             <div @click="toggleExpandCollapse" :class="{'pea-toggle-size-button': true,'dark-mode': (peaDisplayTabIndex==0),'hidden': !isTabContentHovered}">
                 <span :class="{'fas': true, 'fa-expand': !isExpandedPEA, 'fa-compress': isExpandedPEA}" :title="$t((isExpandedPEA)?'PEA.collapse':'PEA.expand')"></span>
             </div>
@@ -65,10 +115,21 @@ export default Vue.extend({
             isTurtleListeningMouseEvents: false, // flag to indicate whether an execution of Turtle resulted in listen for mouse events on Turtle
             isTurtleListeningTimerEvents: false, // flag to indicate whether an execution of Turtle resulted in listen for timer events on Turtle
             stopTurtleUIEventListeners: undefined as ((keepShowingTurtleUI: boolean)=>void) | undefined, // registered callback method to clear the Turtle listeners mentioned above
+        
+            // Code Visualiser
+            totalSteps: -1, // number of executed lines
+            executedLinesList: [],
+            pyodide: null as any, // Pyodide instance
+            isLoading: false,
+            codeLines: [] as { line: string, executed: boolean }[], // Store each line of code and its execution status
+            currentExecutedIndex: 0, // Keeps track of the currently highlighted executed line
+            variablesStack: [] as any[], // Variable stack
+            executionErrorMessage: "", // Error message
         };
     },
 
     mounted(){
+        this.loadPyodide();
         // Just to prevent any inconsistency with a uncompatible state, set a state value here and we'll know we won't get in some error
         useStore().pythonExecRunningState = PythonExecRunningState.NotRunning;
         
@@ -161,6 +222,11 @@ export default Vue.extend({
     computed:{
         ...mapStores(useStore),
 
+        filteredVariables(): any[] {
+            const stepData = this.variablesStack[this.currentExecutedIndex];
+            return Array.isArray(stepData) ? stepData.filter((entry) => Array.isArray(entry) && entry.length === 2) : [];
+        },
+
         graphicsTabId(): string {
             return "strypeGraphicsPEATab";
         },
@@ -204,6 +270,154 @@ export default Vue.extend({
     },
 
     methods: {
+
+        checkForTurtleImport(code: string): boolean {
+            const turtleImportPattern = /^(import turtle|from turtle import)/gm;
+            return turtleImportPattern.test(code);
+        },
+
+        nextExecutedLine() {
+            this.currentExecutedIndex++;
+        },
+
+        prevExecutedLine() {
+            this.currentExecutedIndex--;
+        },
+
+        async loadPyodide() {
+            if (window.loadPyodide) {
+                this.pyodide = await window.loadPyodide();
+            } 
+            else {
+                console.error("Pyodide not loaded");
+            }
+        },
+        async runPythonCode() {
+            if (!this.pyodide) {
+                return;
+            }
+
+            this.executionErrorMessage = "";
+            const parser = new Parser();
+            this.isLoading = true; 
+
+            if (this.checkForTurtleImport(parser.getFullCode())) {
+                this.executionErrorMessage = "Turtle graphics are not supported in this visualizer. Please remove turtle-related imports or method calls.";
+                this.isLoading = false;
+                this.peaDisplayTabIndex = 2;
+                return;
+            }
+
+            this.codeLines = parser.getFullCode().split("\n").map((line) => ({
+                line: line,
+                executed: false, 
+            }));
+
+            this.codeLines.pop();
+
+            try {
+                const pythonCode = `
+import sys 
+
+executed_lines_list = []
+variables_stack = []
+global_vars = {}
+
+code_str = """${parser.getFullCode()}"""
+code_lines = code_str.splitlines()
+
+def is_user_code(frame):
+    """Returns true if the line belongs to user code"""
+    return frame.f_code.co_filename == "<string>"
+
+def is_user_defined(var_name, value):
+    """Filters out built-in and library-defined variables"""
+    return not (var_name.startswith("__") or callable(value) and value.__class__.__name__ == "builtin_function_or_method")
+
+def trace_calls(frame, event, arg):
+    if event == "line" and is_user_code(frame):  
+        if executed_lines_list and executed_lines_list[-1] == frame.f_lineno - 1:
+            return trace_calls 
+
+        executed_lines_list.append(frame.f_lineno - 1)  
+
+        user_vars_before = {
+            k: v.copy() if isinstance(v, (list,dict)) else v
+            for k, v in frame.f_locals.items() if is_user_defined(k, v)
+        }
+        variables_stack.append([[k, str(v) if isinstance(v, dict) else v] for k, v in  user_vars_before.items()])
+
+        user_vars_after = {}
+        for k, v in frame.f_locals.items():
+            if is_user_defined(k, v):
+                user_vars_after[k] = v.copy() if isinstance(v, (list,dict)) else v  
+
+        modified_vars = [
+            k for k in user_vars_before if k in user_vars_after and user_vars_before[k] != user_vars_after[k]
+        ]
+
+        for var in modified_vars:
+            frame.f_locals[var] = user_vars_after[var] 
+
+        if modified_vars:
+            variables_stack.append([[k, str(v) if isinstance(v, dict) else v] for k, v in user_vars_after.items() if k in modified_vars])
+
+    return trace_calls if is_user_code(frame) else None  
+
+def count_executed_lines(code):
+    sys.settrace(trace_calls)
+    try:
+        exec(code, global_vars)
+    finally:
+        sys.settrace(None)
+
+    user_globals = {k: v for k, v in global_vars.items() if is_user_defined(k, v)}
+    variables_stack.append([[k, str(v) if isinstance(v, dict) else v] for k, v in user_globals.items()])
+
+count_executed_lines('''${parser.getFullCode()}''')
+
+[executed_lines_list, variables_stack]
+`;
+
+                const resultProxy = await this.pyodide.runPythonAsync(pythonCode);
+                const result = resultProxy.toJs();
+                this.executedLinesList = result[0];
+                this.variablesStack = result[1];
+                this.currentExecutedIndex = 0; 
+                this.totalSteps = this.executedLinesList.length;                
+                this.peaDisplayTabIndex = 2;
+
+            } 
+            catch (error) {
+                this.executedLinesList = [];
+                this.variablesStack = [];
+                this.currentExecutedIndex = 0;
+                this.totalSteps = 0;
+                
+                let errorMessage = "unknown error occurred";
+
+                if (error instanceof Error) {
+                    errorMessage = error.message;
+                } 
+                else if (typeof error === "string") {
+                    errorMessage = error;
+                }
+
+                const pythonErrorMatch = errorMessage.match(
+                    /(NameError|SyntaxError|TypeError|ValueError|IndexError|KeyError|AttributeError|ImportError|ZeroDivisionError|FileNotFoundError|RuntimeError|IndentationError|KeyboardInterrupt|OverflowError|MemoryError|StopIteration|EOFError|ModuleNotFoundError):.*/
+                );
+                if (pythonErrorMatch) {
+                    errorMessage = pythonErrorMatch[0];  
+                }
+
+                this.executionErrorMessage = errorMessage;
+                this.peaDisplayTabIndex = 2;
+            } 
+            finally {
+                this.isLoading = false;
+            }
+        },
+
         handlePEAMouseDown() {
             // Force the Strype menu to close in case it was opened
             (this.$root.$children[0].$refs[getMenuLeftPaneUID()] as InstanceType<typeof Menu>).toggleMenuOnOff(null);
@@ -609,4 +823,135 @@ export default Vue.extend({
         top: 10px;
         left: 10px;
     }    
+    
+    // Code Visualiser Styling
+    #codeVisualiserDiv {
+        width: 100%;
+        height: auto;
+        max-height: 55vh;
+        background-color: #f8f8f8;
+        color: black;
+        font-family: "Consolas", "Courier New", monospace;
+        font-size: 16px;
+        line-height: 1.6;
+        padding: 15px;
+        overflow-y: auto;
+        border-radius: 5px;
+        border: 1px solid #ccc;
+    }
+
+    .code-container {
+        background-color: #fff;
+        padding: 10px;
+        border-radius: 5px;
+        max-height: 40vh;
+        overflow-y: auto;
+        border: 1px solid #bbb;
+    }
+
+    .line-number {
+        color: #fff; 
+        background-color: #444; 
+        font-weight: bold;
+        padding: 5px 10px;
+        border-radius: 5px;
+        font-size: 14px;
+        min-width: 30px;
+        text-align: center;
+        display: inline-block;
+    }
+
+    .line-separator {
+        color: #aaa;
+        font-weight: bold;
+        margin-right: 10px;
+        margin-left: 5px;
+    }
+
+    .code-content {
+        color: #222;
+        font-size: 16px;
+    }
+
+    .executed-line {
+        background-color: rgba(100, 181, 246, 0.6) !important;
+        border-left: 4px solid #1976d2;
+        padding-left: 10px;
+    }
+
+    .current-line {
+        background-color: rgba(255, 235, 59, 0.8) !important;
+        border-left: 4px solid #ff9800;
+        padding-left: 10px;
+        font-weight: bold;
+    }
+
+    .code-row {
+        display: flex;
+        align-items: center;
+        padding: 8px 12px;
+        border-bottom: 1px solid #ccc;
+    }
+    .code-row:last-child {
+        border-bottom: none;
+    }
+
+    .nav-buttons {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 10px;
+    }
+    .nav-button {
+        background-color: #555;
+        color: white;
+        border: none;
+        padding: 10px 20px;
+        font-size: 14px;
+        border-radius: 5px;
+        cursor: pointer;
+        transition: background 0.2s ease-in-out, transform 0.1s ease-in-out;
+    }
+    .nav-button:hover {
+        background-color: #777;
+        transform: scale(1.05);
+    }
+    .nav-button:disabled {
+        background-color: #444;
+        cursor: not-allowed;
+        opacity: 0.5;
+    }
+
+    .stack-table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 10px;
+        font-size: 15px;
+    }
+    .stack-table th, .stack-table td {
+        padding: 10px;
+        border: 1px solid #777;
+        text-align: left;
+    }
+    .stack-table th {
+        background-color: #555;
+        color: white;
+    }
+    .stack-table td {
+        background-color: #eee;
+        color: #222;
+    }
+
+    .error-message {
+        color: red;
+        font-weight: bold;
+        background-color: #ffdddd;
+        padding: 12px;
+        border: 1px solid red;
+        border-radius: 5px;
+        margin-bottom: 10px;
+        font-size: 14px;
+    }
+
+
 </style>
