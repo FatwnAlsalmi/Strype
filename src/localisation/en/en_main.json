@@ -163,6 +163,8 @@
     "collapse": "Collapse",
     "console": "Console",
     "TurtleGraphics": "Turtle Graphics",
-    "importTurtle": "Import the module 'turtle' to use Turtle Graphics."
+    "importTurtle": "Import the module 'turtle' to use Turtle Graphics.",
+    "CodeVisualiser": "Code Visualiser",
+    "track": "Visualise"
   }
 }

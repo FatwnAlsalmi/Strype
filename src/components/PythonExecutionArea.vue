@@ -13,8 +13,8 @@
                 <span v-else class="python-running">{{runCodeButtonIconText}}</span>
                 <span>{{runCodeButtonLabel}}</span>
             </button>
-            <button @click="runPythonCode" title="Visualize Execution">
-                <span>👀 Track Execution</span>
+            <button @click="runPythonCode" :title="$t('PEA.visualize')">
+                <span>👀 {{ $t('PEA.track') }}</span>
             </button>
         </div>
         <div id="tabContentContainerDiv">

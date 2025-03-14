@@ -142,6 +142,8 @@
     "collapse": "Colapsar",
     "console": "Consola",
     "TurtleGraphics": "Gráficos 'Turtle'",
-    "importTurtle": "Importar el módulo 'turtle'en tu código para usar gráficos 'Turtle'."
+    "importTurtle": "Importar el módulo 'turtle'en tu código para usar gráficos 'Turtle'.",
+    "CodeVisualiser": "visualizador de código",
+    "track": "Visualise"
   }
 }
