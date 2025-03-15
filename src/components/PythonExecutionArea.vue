@@ -326,6 +326,17 @@ global_vars = {}
 code_str = """${parser.getFullCode()}"""
 code_lines = code_str.splitlines()
 
+
+
+import js
+import builtins
+
+def custom_input(prompt="Enter input: "):
+    return js.prompt(prompt)  # Opens a browser pop-up
+
+builtins.input = custom_input
+
+
 def is_user_code(frame):
     """Returns true if the line belongs to user code"""
     return frame.f_code.co_filename == "<string>"
@@ -342,7 +353,7 @@ def trace_calls(frame, event, arg):
         executed_lines_list.append(frame.f_lineno - 1)  
 
         user_vars_before = {
-            k: v.copy() if isinstance(v, (list,dict)) else v
+            k: "Function" if callable(v) else v.copy() if isinstance(v, (list,dict)) else v
             for k, v in frame.f_locals.items() if is_user_defined(k, v)
         }
         variables_stack.append([[k, str(v) if isinstance(v, dict) else v] for k, v in  user_vars_before.items()])
@@ -350,7 +361,7 @@ def trace_calls(frame, event, arg):
         user_vars_after = {}
         for k, v in frame.f_locals.items():
             if is_user_defined(k, v):
-                user_vars_after[k] = v.copy() if isinstance(v, (list,dict)) else v  
+                user_vars_after[k] = "Function" if callable(v) else v.copy() if isinstance(v, (list,dict)) else v  
 
         modified_vars = [
             k for k in user_vars_before if k in user_vars_after and user_vars_before[k] != user_vars_after[k]
@@ -361,7 +372,7 @@ def trace_calls(frame, event, arg):
 
         if modified_vars:
             variables_stack.append([[k, str(v) if isinstance(v, dict) else v] for k, v in user_vars_after.items() if k in modified_vars])
-
+        
     return trace_calls if is_user_code(frame) else None  
 
 def count_executed_lines(code):
@@ -371,7 +382,7 @@ def count_executed_lines(code):
     finally:
         sys.settrace(None)
 
-    user_globals = {k: v for k, v in global_vars.items() if is_user_defined(k, v)}
+    user_globals = {k: "Function" if callable(v) else v for k, v in global_vars.items() if is_user_defined(k, v)}
     variables_stack.append([[k, str(v) if isinstance(v, dict) else v] for k, v in user_globals.items()])
 
 count_executed_lines('''${parser.getFullCode()}''')
@@ -826,7 +837,6 @@ count_executed_lines('''${parser.getFullCode()}''')
     
     // Code Visualiser Styling
     #codeVisualiserDiv {
-        display: flex;
         width: 100%;
         height: auto;
         max-height: 55vh;
