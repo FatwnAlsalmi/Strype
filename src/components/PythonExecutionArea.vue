@@ -826,6 +826,7 @@ count_executed_lines('''${parser.getFullCode()}''')
     
     // Code Visualiser Styling
     #codeVisualiserDiv {
+        display: flex;
         width: 100%;
         height: auto;
         max-height: 55vh;
