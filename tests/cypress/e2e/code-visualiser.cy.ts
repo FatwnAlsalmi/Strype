@@ -1,6 +1,6 @@
-require("cypress-terminal-report/src/installLogsCollector")();
 import failOnConsoleError from "cypress-fail-on-console-error";
 failOnConsoleError();
+
 
 // We need this to prevent test failures.  I don't actually know what the error is for sure
 // (even if you log it, it is not visible), but I suspect it may be a Brython error that I
