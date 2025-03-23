@@ -41,7 +41,6 @@
                 <div v-if="executionErrorMessage" class="error-message">
                     <strong>Error:</strong> {{ executionErrorMessage }}
                 </div>
-
                 <div v-if="!executionErrorMessage"> 
                     <div class="nav-buttons">
                         <button @click="prevExecutedLine" :disabled="currentExecutedIndex <= 0" class="nav-button">Previous</button>
@@ -60,10 +59,7 @@
                             <pre class="code-content">{{ codeLine.line }}</pre>
                         </div>
                     </div>
-
-
                     <p class="iteration-info">Step {{ currentExecutedIndex }} out of {{ totalSteps }}</p>
-
                     <table class="stack-table">
                         <thead>
                             <tr>
@@ -80,8 +76,6 @@
                     </table>
                 </div>
             </div>
-
-
             <div @click="toggleExpandCollapse" :class="{'pea-toggle-size-button': true,'dark-mode': (peaDisplayTabIndex==0),'hidden': !isTabContentHovered}">
                 <span :class="{'fas': true, 'fa-expand': !isExpandedPEA, 'fa-compress': isExpandedPEA}" :title="$t((isExpandedPEA)?'PEA.collapse':'PEA.expand')"></span>
             </div>
@@ -222,6 +216,7 @@ export default Vue.extend({
     computed:{
         ...mapStores(useStore),
 
+        // filters and returns a list of valid variable from variablesStack
         filteredVariables(): any[] {
             const stepData = this.variablesStack[this.currentExecutedIndex];
             return Array.isArray(stepData) ? stepData.filter((entry) => Array.isArray(entry) && entry.length === 2) : [];
@@ -271,19 +266,23 @@ export default Vue.extend({
 
     methods: {
 
+        // checks for import statements for the turtle in the code
         checkForTurtleImport(code: string): boolean {
             const turtleImportPattern = /^(import turtle|from turtle import)/gm;
             return turtleImportPattern.test(code);
         },
 
+        // increments currentExecutedIndex to move to next line
         nextExecutedLine() {
             this.currentExecutedIndex++;
         },
 
+        // Decrements currentExecutedIndex to move to next line
         prevExecutedLine() {
             this.currentExecutedIndex--;
         },
 
+        // Asynchronously loads the Pyodide runtime
         async loadPyodide() {
             if (window.loadPyodide) {
                 this.pyodide = await window.loadPyodide();
@@ -292,6 +291,37 @@ export default Vue.extend({
                 console.error("Pyodide not loaded");
             }
         },
+
+        // Extract Python specific error messages
+        handleExecutionError(error: unknown): void {
+            // Reset visualiser state on error
+            this.executedLinesList = [];
+            this.variablesStack = [];
+            this.currentExecutedIndex = 0;
+            this.totalSteps = 0;
+
+            let errorMessage = "An unknown error occurred.";
+
+            if (error instanceof Error) {
+                errorMessage = error.message;
+            } 
+            else if (typeof error === "string") {
+                errorMessage = error;
+            }
+
+            const pythonErrorMatch = errorMessage.match(
+                /(NameError|SyntaxError|TypeError|ValueError|IndexError|KeyError|AttributeError|ImportError|ZeroDivisionError|FileNotFoundError|RuntimeError|IndentationError|KeyboardInterrupt|OverflowError|MemoryError|StopIteration|EOFError|ModuleNotFoundError):.*/
+            );
+
+            if (pythonErrorMatch) {
+                errorMessage = pythonErrorMatch[0];
+            }
+
+            this.executionErrorMessage = errorMessage;
+            this.peaDisplayTabIndex = 2;
+        },
+        
+        // Executes the Python code using Pyodide and records executed lines data
         async runPythonCode() {
             if (!this.pyodide) {
                 return;
@@ -318,18 +348,27 @@ export default Vue.extend({
             try {
                 const pythonCode = `
 import sys 
+import js
+import builtins
+import ast
+from datetime import datetime
 
+# Whitelist of allowed modules
+ALLOWED_MODULES = {
+    "test", "unittest", "urllib", "urllib.request", "webgl", "antigravity",
+    "array", "bisect", "collections", "copy", "datetime", "document", "image",
+    "itertools", "keyword", "math", "numbers", "operator", "platform", "processing",
+    "random", "re", "signal", "string", "textwrap", "time", "token", "tokenize",
+    "types", "webbrowser"
+}
+    
 executed_lines_list = []
 variables_stack = []
 global_vars = {}
 
-code_str = """${parser.getFullCode()}"""
+code_str = ${JSON.stringify(parser.getFullCode())}
 code_lines = code_str.splitlines()
 
-
-
-import js
-import builtins
 
 def custom_input(prompt="Enter input: "):
     return js.prompt(prompt)  # Opens a browser pop-up
@@ -345,47 +384,88 @@ def is_user_defined(var_name, value):
     """Filters out built-in and library-defined variables"""
     return not (var_name.startswith("__") or callable(value) and value.__class__.__name__ == "builtin_function_or_method")
 
+def format_value(value):
+    """Formats sets, tuples, other lists, and modules"""
+    if isinstance(value, datetime):  # Handle datetime objects
+        return value.strftime("%Y-%m-%d %H:%M:%S")
+    elif isinstance(value, set):
+        return "{" + ", ".join(map(str, value)) + "}" 
+    elif isinstance(value, tuple):
+        return "(" + ", ".join(map(str, value)) + ")" 
+    elif isinstance(value, dict):
+        return "{" + ", ".join(f"{k}: {format_value(v)}" for k, v in value.items()) + "}"
+    elif callable(value):
+        return "Function" 
+    elif hasattr(value, "__name__"):  
+        return f"Module: {value.__name__}"
+    elif isinstance(value, list):
+        return [format_value(item) for item in value]
+    elif hasattr(value, "__module__"): 
+        return f"Module: {value.__name__}"  
+    else:
+        return value 
+
+
+
+def is_standard_library_module(module_name):
+    """ Checks if a module is part of Python's standard library or built-in modules """
+    if module_name in sys.builtin_module_names:
+        return True
+
+    try:
+        module = __import__(module_name)
+        if hasattr(module, "__file__"):
+            return True
+    except ImportError:
+        pass
+
+    return False
+
+def check_imports_in_code(code_str):
+    """ checks if any imported modules are not in the allowed list, and raises an ImportError if an unauthorized module is found """
+    tree = ast.parse(code_str)
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                module_name = alias.name.split(".")[0] 
+                if module_name not in ALLOWED_MODULES and is_standard_library_module(module_name):
+                    raise ImportError(f"Module '{module_name}' is not yet allowed")
+        elif isinstance(node, ast.ImportFrom):
+            module_name = node.module.split(".")[0] 
+            if module_name not in ALLOWED_MODULES and is_standard_library_module(module_name):
+                raise ImportError(f"Module '{module_name}' is not not allowed")
+
 def trace_calls(frame, event, arg):
+    """Record executed lines during code execution"""
     if event == "line" and is_user_code(frame):  
-        if executed_lines_list and executed_lines_list[-1] == frame.f_lineno - 1:
-            return trace_calls 
+        if len(executed_lines_list) >= 400:
+            raise RuntimeError("Execution limit of 400 lines exceeded")
 
-        executed_lines_list.append(frame.f_lineno - 1)  
-
-        user_vars_before = {
-            k: "Function" if callable(v) else v.copy() if isinstance(v, (list,dict)) else v
-            for k, v in frame.f_locals.items() if is_user_defined(k, v)
+        # Capture the state of variables **before** executing the current line
+        user_vars = {
+            k: format_value(v) for k, v in frame.f_locals.items() if is_user_defined(k, v)
         }
-        variables_stack.append([[k, str(v) if isinstance(v, dict) else v] for k, v in  user_vars_before.items()])
+        variables_stack.append([[k, v] for k, v in user_vars.items()])
 
-        user_vars_after = {}
-        for k, v in frame.f_locals.items():
-            if is_user_defined(k, v):
-                user_vars_after[k] = "Function" if callable(v) else v.copy() if isinstance(v, (list,dict)) else v  
+        # Add the current line to the executed lines list
+        executed_lines_list.append(frame.f_lineno - 1)
 
-        modified_vars = [
-            k for k in user_vars_before if k in user_vars_after and user_vars_before[k] != user_vars_after[k]
-        ]
-
-        for var in modified_vars:
-            frame.f_locals[var] = user_vars_after[var] 
-
-        if modified_vars:
-            variables_stack.append([[k, str(v) if isinstance(v, dict) else v] for k, v in user_vars_after.items() if k in modified_vars])
-        
     return trace_calls if is_user_code(frame) else None  
 
-def count_executed_lines(code):
+def trace(code):
+    """ starts the trace function and records final values"""
+    check_imports_in_code(code)
     sys.settrace(trace_calls)
     try:
         exec(code, global_vars)
     finally:
         sys.settrace(None)
 
-    user_globals = {k: "Function" if callable(v) else v for k, v in global_vars.items() if is_user_defined(k, v)}
-    variables_stack.append([[k, str(v) if isinstance(v, dict) else v] for k, v in user_globals.items()])
+    user_globals = {k: format_value(v) for k, v in global_vars.items() if is_user_defined(k, v)}
+    variables_stack.append([[k, v] for k, v in user_globals.items()])
 
-count_executed_lines('''${parser.getFullCode()}''')
+trace(code_str)
 
 [executed_lines_list, variables_stack]
 `;
@@ -400,29 +480,7 @@ count_executed_lines('''${parser.getFullCode()}''')
 
             } 
             catch (error) {
-                this.executedLinesList = [];
-                this.variablesStack = [];
-                this.currentExecutedIndex = 0;
-                this.totalSteps = 0;
-                
-                let errorMessage = "unknown error occurred";
-
-                if (error instanceof Error) {
-                    errorMessage = error.message;
-                } 
-                else if (typeof error === "string") {
-                    errorMessage = error;
-                }
-
-                const pythonErrorMatch = errorMessage.match(
-                    /(NameError|SyntaxError|TypeError|ValueError|IndexError|KeyError|AttributeError|ImportError|ZeroDivisionError|FileNotFoundError|RuntimeError|IndentationError|KeyboardInterrupt|OverflowError|MemoryError|StopIteration|EOFError|ModuleNotFoundError):.*/
-                );
-                if (pythonErrorMatch) {
-                    errorMessage = pythonErrorMatch[0];  
-                }
-
-                this.executionErrorMessage = errorMessage;
-                this.peaDisplayTabIndex = 2;
+                this.handleExecutionError(error);
             } 
             finally {
                 this.isLoading = false;

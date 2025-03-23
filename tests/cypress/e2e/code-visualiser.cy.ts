@@ -41,9 +41,9 @@ describe("Code Visualiser Functionality", () => {
 
     it("should execute Python code and display the execution steps in the Code Visualiser", () => {
 
-        cy.wait(3000);
+        cy.wait(1000);
         cy.get("button").contains("Visualise").click();
-        cy.wait(3000); 
+        cy.wait(1000); 
 
         cy.get("#codeVisualiserDiv").should("be.visible");
 
@@ -60,11 +60,38 @@ describe("Code Visualiser Functionality", () => {
         cy.get("#codeVisualiserDiv .current-line").should("have.length", 1);
     });
 
+    it("should execute Python code and display the execution steps in the Code Visualiser - for-loop", () => {
+
+        cy.get("body").type("f");
+        cy.get("body").type("x{rightarrow}[1,2,3]");
+        cy.get("body").type("{downarrow}px");
+        cy.wait(1000);
+        cy.get("button").contains("Visualise").click();
+        cy.wait(1000); 
+
+        cy.get("#codeVisualiserDiv").should("be.visible");
+
+        cy.get("#codeVisualiserDiv .code-row").should("have.length", 4);
+        cy.get("#codeVisualiserDiv .current-line").should("exist");
+        
+        cy.get("#codeVisualiserDiv .stack-table th").should("have.length", 2); 
+
+        cy.get("#codeVisualiserDiv .nav-button").contains("Next").click();
+        cy.get("#codeVisualiserDiv .nav-button").contains("Next").click();
+        cy.get("#codeVisualiserDiv .nav-button").contains("Next").click();
+        cy.get("#codeVisualiserDiv .stack-table td").contains("x").should("exist");
+        cy.get("#codeVisualiserDiv .stack-table td").contains("2").should("exist");
+        cy.get("#codeVisualiserDiv .current-line").should("have.length", 1);
+
+        cy.get("#codeVisualiserDiv .nav-button").contains("Previous").click();
+        cy.get("#codeVisualiserDiv .current-line").should("have.length", 1);
+    });
+
     it("should display an error message for unsupported Turtle code", () => {
 
         cy.get("body").type("{uparrow}{uparrow}i");
         cy.get("body").type("turtle");
-        cy.wait(5000);
+        cy.wait(2000);
 
         cy.get("#peaControlsDiv button").contains("Visualise").click();
 
@@ -72,6 +99,21 @@ describe("Code Visualiser Functionality", () => {
         cy.get("#codeVisualiserDiv .error-message").should(
             "contain.text",
             "Turtle graphics are not supported in this visualizer"
+        );
+    });
+
+    it("should display an error message for unsupported Modules", () => {
+
+        cy.get("body").type("{uparrow}{uparrow}i");
+        cy.get("body").type("os");
+        cy.wait(2000);
+
+        cy.get("#peaControlsDiv button").contains("Visualise").click();
+
+        cy.get("#codeVisualiserDiv .error-message", { timeout: 1000 }).should("be.visible");
+        cy.get("#codeVisualiserDiv .error-message").should(
+            "contain.text",
+            "Module 'os' is not yet allowed"
         );
     });
 });
